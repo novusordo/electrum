@@ -21,7 +21,7 @@
 
 import android
 
-from electrum import SimpleConfig, Interface, WalletSynchronizer, Wallet, format_satoshis, mnemonic_encode, mnemonic_decode
+from electrum import SimpleConfig, Interface, WalletSynchronizer, Wallet, format_satoshis, mnemonic_encode, mnemonic_decode, is_valid
 from decimal import Decimal
 import datetime, re
 
@@ -100,8 +100,9 @@ def select_from_contacts():
 def select_from_addresses():
     droid.dialogCreateAlert("Addresses:")
     l = []
-    for i in range(len(wallet.addresses)):
-        addr = wallet.addresses[i]
+    addresses = wallet.addresses()
+    for i in range(len(addresses)):
+        addr = addresses[i]
         label = wallet.labels.get(addr,addr)
         l.append( label )
     droid.dialogSetItems(l)
@@ -110,7 +111,7 @@ def select_from_addresses():
     result = response.result.get('item')
     droid.dialogDismiss()
     if result is not None:
-        addr = wallet.addresses[result]
+        addr = addresses[result]
         return addr
 
 
@@ -451,11 +452,14 @@ def pay_to(recipient, amount, fee, label):
     droid.dialogShow()
 
     try:
-        tx = wallet.mktx( [(recipient, amount)], label, password, fee)
+        tx = wallet.mktx( [(recipient, amount)], password, fee)
     except BaseException, e:
         modal_dialog('error', e.message)
         droid.dialogDismiss()
         return
+
+    if label: 
+        self.wallet.labels[tx.hash()] = label
 
     droid.dialogDismiss()
 
@@ -480,7 +484,7 @@ def make_new_contact():
         if data:
             if re.match('^bitcoin:', data):
                 address, _, _, _, _, _, _ = wallet.parse_url(data, None, lambda x: modal_question('Question',x))
-            elif wallet.is_valid(data):
+            elif is_valid(data):
                 address = data
             else:
                 address = None
@@ -586,7 +590,7 @@ def payto_loop():
                 label  = droid.fullQueryDetail("label").result.get('text')
                 amount = droid.fullQueryDetail('amount').result.get('text')
 
-                if not wallet.is_valid(recipient):
+                if not is_valid(recipient):
                     modal_dialog('Error','Invalid Bitcoin address')
                     continue
 

@@ -29,14 +29,17 @@ class Exchanger(threading.Thread):
 
     def discovery(self):
         try:
-            connection = httplib.HTTPSConnection('blockchain.info')
+            connection = httplib.HTTPConnection('blockchain.info')
             connection.request("GET", "/ticker")
         except:
             return
         response = connection.getresponse()
         if response.reason == httplib.responses[httplib.NOT_FOUND]:
             return
-        response = json.loads(response.read())
+        try:
+            response = json.loads(response.read())
+        except:
+            return
         quote_currencies = {}
         try:
             for r in response:

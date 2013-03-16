@@ -1,3 +1,4 @@
-lib/gui_qt.py
-lib/gui.py
-lib/gui_lite.py
+gui/gui_gtk.py
+gui/gui_classic.py
+gui/gui_lite.py
+gui/history_widget.py

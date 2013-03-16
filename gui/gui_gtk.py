@@ -23,17 +23,18 @@ import pygtk
 pygtk.require('2.0')
 import gtk, gobject
 from decimal import Decimal
-from util import print_error
-
-import pyqrnative, mnemonic
+from electrum.util import print_error
+from electrum import is_valid
+from electrum import mnemonic
+import pyqrnative
 
 gtk.gdk.threads_init()
 APP_NAME = "Electrum"
 import platform
 MONOSPACE_FONT = 'Lucida Console' if platform.system() == 'Windows' else 'monospace'
 
-from wallet import format_satoshis
-from interface import DEFAULT_SERVERS
+from electrum.util import format_satoshis
+from electrum.interface import DEFAULT_SERVERS
 
 def numbify(entry, is_int = False):
     text = entry.get_text().strip()
@@ -815,7 +816,7 @@ class ElectrumWindow:
         else:
             to_address = r
 
-        if not self.wallet.is_valid(to_address):
+        if not is_valid(to_address):
             self.show_message( "invalid bitcoin address:\n"+to_address)
             return
 
@@ -838,11 +839,14 @@ class ElectrumWindow:
             password = None
 
         try:
-            tx = self.wallet.mktx( [(to_address, amount)], label, password, fee )
+            tx = self.wallet.mktx( [(to_address, amount)], password, fee )
         except BaseException, e:
             self.show_message(str(e))
             return
             
+        if label: 
+            self.wallet.labels[tx.hash()] = label
+
         status, msg = self.wallet.sendtx( tx )
         if status:
             self.show_message( "payment sent.\n" + msg )
@@ -864,14 +868,14 @@ class ElectrumWindow:
                 self.show_message(tx_details)
             elif treeview == self.contacts_treeview:
                 m = self.addressbook_list.get_value( self.addressbook_list.get_iter(c), 0)
-                a = self.wallet.aliases.get(m)
-                if a:
-                    if a[0] in self.wallet.authorities.keys():
-                        s = self.wallet.authorities.get(a[0])
-                    else:
-                        s = "self-signed"
-                    msg = 'Alias: '+ m + '\nTarget address: '+ a[1] + '\n\nSigned by: ' + s + '\nSigning address:' + a[0]
-                    self.show_message(msg)
+                #a = self.wallet.aliases.get(m)
+                #if a:
+                #    if a[0] in self.wallet.authorities.keys():
+                #        s = self.wallet.authorities.get(a[0])
+                #    else:
+                #        s = "self-signed"
+                #    msg = 'Alias: '+ m + '\nTarget address: '+ a[1] + '\n\nSigned by: ' + s + '\nSigning address:' + a[0]
+                #    self.show_message(msg)
             
 
     def treeview_key_press(self, treeview, event):
@@ -886,14 +890,14 @@ class ElectrumWindow:
                 self.show_message(tx_details)
             elif treeview == self.contacts_treeview:
                 m = self.addressbook_list.get_value( self.addressbook_list.get_iter(c), 0)
-                a = self.wallet.aliases.get(m)
-                if a:
-                    if a[0] in self.wallet.authorities.keys():
-                        s = self.wallet.authorities.get(a[0])
-                    else:
-                        s = "self"
-                    msg = 'Alias:'+ m + '\n\nTarget: '+ a[1] + '\nSigned by: ' + s + '\nSigning address:' + a[0]
-                    self.show_message(msg)
+                #a = self.wallet.aliases.get(m)
+                #if a:
+                #    if a[0] in self.wallet.authorities.keys():
+                #        s = self.wallet.authorities.get(a[0])
+                #    else:
+                #        s = "self"
+                #    msg = 'Alias:'+ m + '\n\nTarget: '+ a[1] + '\nSigned by: ' + s + '\nSigning address:' + a[0]
+                #    self.show_message(msg)
 
         return False
 
@@ -1130,7 +1134,7 @@ class ElectrumWindow:
 
     def update_receiving_tab(self):
         self.recv_list.clear()
-        for address in self.wallet.all_addresses():
+        for address in self.wallet.addresses(True):
             if self.wallet.is_change(address):continue
             label = self.wallet.labels.get(address)
             h = self.wallet.history.get(address,[])
@@ -1141,18 +1145,18 @@ class ElectrumWindow:
     def update_sending_tab(self):
         # detect addresses that are not mine in history, add them here...
         self.addressbook_list.clear()
-        for alias, v in self.wallet.aliases.items():
-            s, target = v
-            label = self.wallet.labels.get(alias)
-            self.addressbook_list.append((alias, label, '-'))
+        #for alias, v in self.wallet.aliases.items():
+        #    s, target = v
+        #    label = self.wallet.labels.get(alias)
+        #    self.addressbook_list.append((alias, label, '-'))
             
         for address in self.wallet.addressbook:
             label = self.wallet.labels.get(address)
             n = 0 
-            for item in self.wallet.transactions.values():
-                if address in item['outputs'] : n=n+1
-            tx = "None" if n==0 else "%d"%n
-            self.addressbook_list.append((address, label, tx))
+            for tx in self.wallet.transactions.values():
+                if address in map(lambda x:x[0], tx.outputs): n += 1
+
+            self.addressbook_list.append((address, label, "%d"%n))
 
     def update_history_tab(self):
         cursor = self.history_treeview.get_cursor()[0]
@@ -1172,12 +1176,46 @@ class ElectrumWindow:
 
             label, is_default_label = self.wallet.get_label(tx_hash)
             tooltip = tx_hash + "\n%d confirmations"%conf if tx_hash else ''
-            details = self.wallet.get_tx_details(tx_hash)
+            details = self.get_tx_details(tx_hash)
 
             self.history_list.prepend( [tx_hash, conf_icon, time_str, label, is_default_label,
                                         format_satoshis(value,True,self.wallet.num_zeros),
                                         format_satoshis(balance,False,self.wallet.num_zeros), tooltip, details] )
         if cursor: self.history_treeview.set_cursor( cursor )
+
+
+    def get_tx_details(self, tx_hash):
+        import datetime
+        if not tx_hash: return ''
+        tx = self.wallet.transactions.get(tx_hash)
+        is_mine, v, fee = self.wallet.get_tx_value(tx)
+        conf, timestamp = self.wallet.verifier.get_confirmations(tx_hash)
+
+        if timestamp:
+            time_str = datetime.datetime.fromtimestamp(timestamp).isoformat(' ')[:-3]
+        else:
+            time_str = 'pending'
+
+        inputs = map(lambda x: x.get('address'), tx.inputs)
+        outputs = map(lambda x: x.get('address'), tx.d['outputs'])
+        tx_details = "Transaction Details" +"\n\n" \
+            + "Transaction ID:\n" + tx_hash + "\n\n" \
+            + "Status: %d confirmations\n"%conf
+        if is_mine:
+            if fee: 
+                tx_details += "Amount sent: %s\n"% format_satoshis(v-fee, False) \
+                              + "Transaction fee: %s\n"% format_satoshis(fee, False)
+            else:
+                tx_details += "Amount sent: %s\n"% format_satoshis(v, False) \
+                              + "Transaction fee: unknown\n"
+        else:
+            tx_details += "Amount received: %s\n"% format_satoshis(v, False) \
+
+        tx_details += "Date: %s\n\n"%time_str \
+            + "Inputs:\n-"+ '\n-'.join(inputs) + "\n\n" \
+            + "Outputs:\n-"+ '\n-'.join(outputs)
+
+        return tx_details
 
 
 
@@ -1217,7 +1255,7 @@ class ElectrumWindow:
         dialog.destroy()
 
         if result == 1:
-            if self.wallet.is_valid(address):
+            if is_valid(address):
                 self.wallet.addressbook.append(address)
                 if label:  self.wallet.labels[address] = label
                 self.wallet.save()

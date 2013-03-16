@@ -2,7 +2,8 @@ import curses, datetime
 from decimal import Decimal
 _ = lambda x:x
 #from i18n import _
-from util import format_satoshis, set_verbosity
+from electrum.util import format_satoshis, set_verbosity
+from electrum.bitcoin import is_valid
 
 import tty, sys
 
@@ -105,7 +106,7 @@ class ElectrumGui:
         self.print_list(messages, "%19s  %25s "%("Address", "Label"))
 
     def print_receive(self):
-        messages = map(lambda addr: "%30s    %30s       "%(addr, self.wallet.labels.get(addr,"")), self.wallet.addresses)
+        messages = map(lambda addr: "%30s    %30s       "%(addr, self.wallet.labels.get(addr,"")), self.wallet.addresses())
         self.print_list(messages, "%19s  %25s "%("Address", "Label"))
 
     def print_edit_line(self, y, label, text, index, size):
@@ -238,7 +239,7 @@ class ElectrumGui:
         self.str_description = ''
 
     def do_send(self):
-        if not self.wallet.is_valid(self.str_recipient):
+        if not is_valid(self.str_recipient):
             self.show_message(_('Invalid Bitcoin address'))
             return
         try:
@@ -260,11 +261,14 @@ class ElectrumGui:
             password = None
 
         try:
-            tx = self.wallet.mktx( [(self.str_recipient, amount)], self.str_description, password, fee)
+            tx = self.wallet.mktx( [(self.str_recipient, amount)], password, fee)
         except BaseException, e:
             self.show_message(str(e))
             return
             
+        if self.str_description: 
+            self.wallet.labels[tx.hash()] = self.str_description
+
         h = self.wallet.send_tx(tx)
         self.show_message(_("Please wait..."), getchar=False)
         self.wallet.tx_event.wait()
@@ -273,7 +277,7 @@ class ElectrumGui:
         if status:
             self.show_message(_('Payment sent.'))
             self.do_clear()
-            self.update_contacts_tab()
+            #self.update_contacts_tab()
         else:
             self.show_message(_('Error'))
 

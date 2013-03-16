@@ -243,8 +243,11 @@ class Interface(threading.Thread):
         if self.session_id:
             headers['cookie'] = 'SESSION=%s'%self.session_id
 
-        req = urllib2.Request(self.connection_msg, data_json, headers)
-        response_stream = urllib2.urlopen(req, timeout=DEFAULT_TIMEOUT)
+        try:
+            req = urllib2.Request(self.connection_msg, data_json, headers)
+            response_stream = urllib2.urlopen(req, timeout=DEFAULT_TIMEOUT)
+        except:
+            return
 
         for index, cookie in enumerate(cj):
             if cookie.name=='SESSION':
@@ -467,6 +470,9 @@ class Interface(threading.Thread):
                     if message not in self.subscriptions[channel]:
                         self.subscriptions[channel].append(message)
 
+        if not self.is_connected: 
+            return
+
         if self.protocol in 'st':
             with self.lock:
                 out = self.send_tcp(messages, channel)
@@ -513,14 +519,14 @@ class Interface(threading.Thread):
             print "changing server:", server, proxy
             self.server = server
             self.proxy = proxy
-            if self.protocol in 'st' and self.s:
+            if self.is_connected and self.protocol in 'st' and self.s:
                 self.s.shutdown(socket.SHUT_RDWR)
                 self.s.close()
             self.is_connected = False  # this exits the polling loop
             self.trigger_callback('disconnecting') # for actively disconnecting
 
     def stop(self):
-        if self.protocol in 'st' and self.s:
+        if self.is_connected and self.protocol in 'st' and self.s:
             self.s.shutdown(socket.SHUT_RDWR)
             self.s.close()
 
@@ -583,10 +589,14 @@ class Interface(threading.Thread):
         return out
 
 
-    def start(self):
+    def start(self, wait=True):
         threading.Thread.start(self)
-        # wait until connection is established
-        self.connect_event.wait()
+        if wait:
+            # wait until connection is established
+            self.connect_event.wait()
+            if not self.is_connected:
+                return False
+        return True
 
     def run(self):
         while True:

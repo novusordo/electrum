@@ -11,29 +11,28 @@ except ImportError:
     print "If you have pip installed try 'sudo pip install pyqt' if you are on Debian/Ubuntu try 'sudo apt-get install python-qt4'."
     sys.exit(0)
 
-
-
-
 from decimal import Decimal as D
-from util import get_resource_path as rsrc
+from electrum.util import get_resource_path as rsrc
+from electrum.bitcoin import is_valid
 from i18n import _
 import decimal
 import exchange_rate
+import json
 import os.path
 import random
 import re
 import time
-import wallet
+from electrum import wallet
 import webbrowser
 import history_widget
 import receiving_widget
-import util
+from electrum import util
 import csv 
 import datetime
 
-from version import ELECTRUM_VERSION as electrum_version
-from wallet import format_satoshis
-import gui_qt
+from electrum.version import ELECTRUM_VERSION as electrum_version
+from electrum.util import format_satoshis, age
+import gui_classic
 import shutil
 
 bitcoin = lambda v: v * 100000000
@@ -88,7 +87,8 @@ def load_theme_paths():
 
 def csv_transaction(wallet):
     try:
-        fileName = QFileDialog.getSaveFileName(QWidget(), 'Select file to export your wallet transactions to', os.path.expanduser('~/electrum-history.csv'), "*.csv")
+        select_export = _('Select file to export your wallet transactions to')
+        fileName = QFileDialog.getSaveFileName(QWidget(), select_export, os.path.expanduser('~/electrum-history.csv'), "*.csv")
         if fileName:
             with open(fileName, "w+") as csvfile:
                 transaction = csv.writer(csvfile)
@@ -126,7 +126,8 @@ def csv_transaction(wallet):
                     transaction.writerow([tx_hash, label, confirmations, value_string, fee_string, balance_string, time_string])
                 QMessageBox.information(None,"CSV Export created", "Your CSV export has been successfully created.")
     except (IOError, os.error), reason:
-        QMessageBox.critical(None,"Unable to create csv", "Electrum was unable to produce a transaction export.\n" + str(reason))
+        export_error_label = _("Electrum was unable to produce a transaction export.")
+        QMessageBox.critical(None,"Unable to create csv", export_error_label + "\n" + str(reason))
 
 
 class ElectrumGui(QObject):
@@ -172,7 +173,7 @@ class ElectrumGui(QObject):
         if self.expert == None:
             timer = Timer()
             timer.start()
-            self.expert = gui_qt.ElectrumWindow(self.wallet, self.config)
+            self.expert = gui_classic.ElectrumWindow(self.wallet, self.config)
             self.expert.app = self.app
             self.expert.connect_slots(timer)
             self.expert.update_wallet()
@@ -199,7 +200,7 @@ class ElectrumGui(QObject):
         return choice == QMessageBox.Yes
 
     def restore_or_create(self):
-        qt_gui_object = gui_qt.ElectrumGui(self.wallet, self.app)
+        qt_gui_object = gui_classic.ElectrumGui(self.wallet, self.app)
         return qt_gui_object.restore_or_create()
 
 class TransactionWindow(QDialog):
@@ -218,10 +219,11 @@ class TransactionWindow(QDialog):
 
         self.setModal(True)
         self.resize(200,100)
-        self.setWindowTitle("Transaction successfully sent")
+        self.setWindowTitle(_("Transaction successfully sent"))
 
         self.layout = QGridLayout(self)
-        self.layout.addWidget(QLabel("Your transaction has been sent.\nPlease enter a label for this transaction for future reference."))
+        history_label = "%s\n%s" % (_("Your transaction has been sent."), _("Please enter a label for this transaction for future reference."))
+        self.layout.addWidget(QLabel(history_label))
 
         self.label_edit = QLineEdit()
         self.label_edit.setPlaceholderText(_("Transaction label"))
@@ -292,7 +294,11 @@ class MiniWindow(QDialog):
         self.amount_input.setAttribute(Qt.WA_MacShowFocusRect, 0)
         self.amount_input.textChanged.connect(self.amount_input_changed)
 
-        self.send_button = QPushButton(_("&Send"))
+        if self.actuator.wallet.seed:
+            self.send_button = QPushButton(_("&Send"))
+        else:
+            self.send_button = QPushButton(_("&Create"))
+
         self.send_button.setObjectName("send_button")
         self.send_button.setDisabled(True);
         self.send_button.clicked.connect(self.send)
@@ -340,7 +346,7 @@ class MiniWindow(QDialog):
 
 
         # Label
-        extra_layout.addWidget( QLabel(_('Selecting an address will copy it to the clipboard.\nDouble clicking the label will allow you to edit it.') ),0,0)
+        extra_layout.addWidget( QLabel(_('Selecting an address will copy it to the clipboard.') + '\n' + _('Double clicking the label will allow you to edit it.') ),0,0)
 
         extra_layout.addWidget(self.receiving, 1,0)
         extra_layout.addWidget(hide_used, 2,0)
@@ -493,7 +499,7 @@ class MiniWindow(QDialog):
         quote_text = self.create_quote_text(btc_balance)
         if quote_text:
             quote_text = "(%s)" % quote_text
-        btc_balance = "%.2f" % (btc_balance / bitcoin(1))
+        btc_balance = "%.4f" % (btc_balance / bitcoin(1))
         self.balance_label.set_balance_text(btc_balance, quote_text)
         self.setWindowTitle("Electrum %s - %s BTC" % (electrum_version, btc_balance))
 
@@ -554,7 +560,7 @@ class MiniWindow(QDialog):
           address = match2.group(2)
           self.address_input.setText(address)
 
-        if self.actuator.is_valid(address):
+        if is_valid(address):
             self.check_button_status()
             self.address_input.setProperty("isValid", True)
             self.recompute_style(self.address_input)
@@ -580,7 +586,6 @@ class MiniWindow(QDialog):
  
 
     def update_history(self, tx_history):
-        from util import format_satoshis, age
 
         self.history_list.empty()
 
@@ -599,11 +604,11 @@ class MiniWindow(QDialog):
 
     def show_about(self):
         QMessageBox.about(self, "Electrum",
-            _("Electrum's focus is speed, with low resource usage and simplifying Bitcoin. You do not need to perform regular backups, because your wallet can be recovered from a secret phrase that you can memorize or write on paper. Startup times are instant because it operates in conjunction with high-performance servers that handle the most complicated parts of the Bitcoin system."))
+            _("Version")+" %s" % (electrum_version) + "\n\n" + _("Electrum's focus is speed, with low resource usage and simplifying Bitcoin. You do not need to perform regular backups, because your wallet can be recovered from a secret phrase that you can memorize or write on paper. Startup times are instant because it operates in conjunction with high-performance servers that handle the most complicated parts of the Bitcoin system."))
 
     def show_report_bug(self):
         QMessageBox.information(self, "Electrum - " + _("Reporting Bugs"),
-            _("Please report any bugs as issues on github: <a href=\"https://github.com/spesmilo/electrum/issues\">https://github.com/spesmilo/electrum/issues</a>"))
+            _("Please report any bugs as issues on github:")+" <a href=\"https://github.com/spesmilo/electrum/issues\">https://github.com/spesmilo/electrum/issues</a>")
 
     def toggle_receiving_layout(self, toggle_state):
         if toggle_state:
@@ -621,13 +626,13 @@ class MiniWindow(QDialog):
 
     def backup_wallet(self):
         try:
-          folderName = QFileDialog.getExistingDirectory(QWidget(), 'Select folder to save a copy of your wallet to', os.path.expanduser('~/'))
+          folderName = QFileDialog.getExistingDirectory(QWidget(), _('Select folder to save a copy of your wallet to'), os.path.expanduser('~/'))
           if folderName:
             sourceFile = util.user_dir() + '/electrum.dat'
             shutil.copy2(sourceFile, str(folderName))
-            QMessageBox.information(None,"Wallet backup created", "A copy of your wallet file was created in '%s'" % str(folderName))
+            QMessageBox.information(None,"Wallet backup created", _("A copy of your wallet file was created in")+" '%s'" % str(folderName))
         except (IOError, os.error), reason:
-          QMessageBox.critical(None,"Unable to create backup", "Electrum was unable copy your wallet file to the specified location.\n" + str(reason))
+          QMessageBox.critical(None,"Unable to create backup", _("Electrum was unable to copy your wallet file to the specified location.")+"\n" + str(reason))
 
 
 
@@ -794,7 +799,7 @@ class MiniActuator:
 
     def copy_address(self, receive_popup):
         """Copy the wallet addresses into the client."""
-        addrs = [addr for addr in self.wallet.all_addresses()
+        addrs = [addr for addr in self.wallet.addresses(True)
                  if not self.wallet.is_change(addr)]
         # Select most recent addresses from gap limit
         addrs = addrs[-self.wallet.gap_limit:]
@@ -827,7 +832,7 @@ class MiniActuator:
         """Send bitcoins to the target address."""
         dest_address = self.fetch_destination(address)
 
-        if dest_address is None or not self.wallet.is_valid(dest_address):
+        if dest_address is None or not is_valid(dest_address):
             QMessageBox.warning(parent_window, _('Error'), 
                 _('Invalid Bitcoin Address') + ':\n' + address, _('OK'))
             return False
@@ -851,29 +856,37 @@ class MiniActuator:
             fee = bitcoin(1) / 1000
 
         try:
-            tx = self.wallet.mktx([(dest_address, amount)], "", password, fee)
+            tx = self.wallet.mktx([(dest_address, amount)], password, fee)
         except BaseException as error:
             QMessageBox.warning(parent_window, _('Error'), str(error), _('OK'))
             return False
 
-        h = self.wallet.send_tx(tx)
+        if tx.is_complete:
+            h = self.wallet.send_tx(tx)
 
-        self.waiting_dialog(lambda: False if self.wallet.tx_event.isSet() else _("Sending transaction, please wait..."))
+            self.waiting_dialog(lambda: False if self.wallet.tx_event.isSet() else _("Sending transaction, please wait..."))
+              
+            status, message = self.wallet.receive_tx(h)
+
+            if not status:
+                import tempfile
+                dumpf = tempfile.NamedTemporaryFile(delete=False)
+                dumpf.write(tx)
+                dumpf.close()
+                print "Dumped error tx to", dumpf.name
+                QMessageBox.warning(parent_window, _('Error'), message, _('OK'))
+                return False
           
-        status, message = self.wallet.receive_tx(h)
-
-        if not status:
-            import tempfile
-            dumpf = tempfile.NamedTemporaryFile(delete=False)
-            dumpf.write(tx)
-            dumpf.close()
-            print "Dumped error tx to", dumpf.name
-            QMessageBox.warning(parent_window, _('Error'), message, _('OK'))
-            return False
-      
-        TransactionWindow(message, self)
-#        QMessageBox.information(parent_window, '',
-#            _('Your transaction has been sent.') + '\n' + message, _('OK'))
+            TransactionWindow(message, self)
+        else:
+            filename = 'unsigned_tx_%s' % (time.mktime(time.gmtime()))
+            try:
+                fileName = QFileDialog.getSaveFileName(QWidget(), _("Select a transaction filename"), os.path.expanduser('~/%s' % (filename)))
+                with open(fileName,'w') as f:
+                    f.write(json.dumps(tx.as_dict(),indent=4) + '\n')
+                QMessageBox.information(QWidget(), _('Unsigned transaction created'), _("Unsigned transaction was saved to file:") + " " +fileName, _('OK'))
+            except BaseException as e:
+                QMessageBox.warning(QWidget(), _('Error'), _('Could not write transaction to file: %s' % e), _('OK'))
         return True
 
     def fetch_destination(self, address):
@@ -897,15 +910,11 @@ class MiniActuator:
         else:
             return recipient
 
-    def is_valid(self, address):
-        """Check if bitcoin address is valid."""
-
-        return self.wallet.is_valid(address)
 
     def copy_master_public_key(self):
         master_pubkey = self.wallet.master_public_key
         qApp.clipboard().setText(master_pubkey)
-        QMessageBox.information(None,"Copy successful", "Your master public key has been copied to your clipboard.")
+        QMessageBox.information(None, _("Copy successful"), _("Your master public key has been copied to your clipboard."))
         
 
     def acceptbit(self, currency):
@@ -914,7 +923,7 @@ class MiniActuator:
         webbrowser.open(url)
 
     def show_seed_dialog(self):
-        gui_qt.ElectrumWindow.show_seed_dialog(self.wallet)
+        gui_classic.ElectrumWindow.show_seed_dialog(self.wallet)
 
 class MiniDriver(QObject):
 
